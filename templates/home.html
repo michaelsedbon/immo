@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% set active = "home" %}
+{% block content %}
+
+<div class="mb-4">
+  <h1 class="h4 mb-1">Findings</h1>
+  <div class="text-muted small">
+    Baseline DVF/DVF+ · historique · comparaison avec les offres
+  </div>
+</div>
+
+{% macro divider() -%}
+  <div class="my-5" style="border-top: 1px solid rgba(0,0,0,0.15);"></div>
+{%- endmacro %}
+
+{% for s in sections %}
+
+  {# Even index: plot left / text right; odd index: inverse #}
+  {% set plot_left = (loop.index0 % 2 == 0) %}
+
+  <div class="row g-5 align-items-start">
+
+    {% if plot_left %}
+      {# ---- PLOT (WIDER) ---- #}
+      <div class="col-12 col-lg-7">
+        {% if s.plot_html %}
+          {{ s.plot_html | safe }}
+        {% else %}
+          <div class="text-muted small">Missing plot</div>
+        {% endif %}
+      </div>
+
+      {# ---- TEXT (NARROWER) ---- #}
+      <div class="col-12 col-lg-5">
+        <div class="pt-1">
+          {% if s.kicker %}
+            <div class="text-uppercase text-muted small mb-2">
+              {{ s.kicker }}
+            </div>
+          {% endif %}
+          {% if s.title %}
+            <h2 class="h6 mb-2">{{ s.title }}</h2>
+          {% endif %}
+          {% if s.body %}
+            <p class="mb-2">{{ s.body }}</p>
+          {% endif %}
+          {% if s.note %}
+            <p class="text-muted small mb-0">{{ s.note }}</p>
+          {% endif %}
+        </div>
+      </div>
+
+    {% else %}
+
+      {# ---- TEXT (LEFT) ---- #}
+      <div class="col-12 col-lg-5 order-2 order-lg-1">
+        <div class="pt-1">
+          {% if s.kicker %}
+            <div class="text-uppercase text-muted small mb-2">
+              {{ s.kicker }}
+            </div>
+          {% endif %}
+          {% if s.title %}
+            <h2 class="h6 mb-2">{{ s.title }}</h2>
+          {% endif %}
+          {% if s.body %}
+            <p class="mb-2">{{ s.body }}</p>
+          {% endif %}
+          {% if s.note %}
+            <p class="text-muted small mb-0">{{ s.note }}</p>
+          {% endif %}
+        </div>
+      </div>
+
+      {# ---- PLOT (RIGHT, WIDER) ---- #}
+      <div class="col-12 col-lg-7 order-1 order-lg-2">
+        {% if s.plot_html %}
+          {{ s.plot_html | safe }}
+        {% else %}
+          <div class="text-muted small">Missing plot</div>
+        {% endif %}
+      </div>
+
+    {% endif %}
+  </div>
+
+  {% if not loop.last %}
+    {{ divider() }}
+  {% endif %}
+
+{% endfor %}
+
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex align-items-baseline justify-content-between mb-3">
+  <div>
+    <h1 class="h4 mb-1">Offers</h1>
+    <div class="text-muted small">Scraped listings (asking prices) — parsed from saved HTML</div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-6">
+    <div class="card card-min">
+      <div class="card-body">
+        <div class="text-muted small">Offers loaded</div>
+        <div class="display-6">{{ stats.offers_rows }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card card-min">
+      <div class="card-body">
+        <div class="text-muted small">Arrondissements covered</div>
+        <div class="display-6">{{ stats.offers_arrs }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if figs.offers_median_bar %}
+  <div class="card card-min mb-3">
+    <div class="card-body">
+      {{ figs.offers_median_bar|safe }}
+    </div>
+  </div>
+{% endif %}
+
+{% if figs.offers_volume_bar %}
+  <div class="card card-min mb-3">
+    <div class="card-body">
+      {{ figs.offers_volume_bar|safe }}
+    </div>
+  </div>
+{% endif %}
+
+<hr class="my-4">
+
+<h2 class="h6 mb-2">Listings (first 50 rows)</h2>
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        {% for c in offers_cols %}
+          <th class="text-muted small">{{ c }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in offers_table %}
+        <tr>
+          {% for c in offers_cols %}
+            {% if c == "url" and row.get(c) %}
+              <td class="small"><a href="{{ row.get(c) }}" target="_blank" rel="noopener">open</a></td>
+            {% else %}
+              <td class="small">{{ row.get(c, "") }}</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}
