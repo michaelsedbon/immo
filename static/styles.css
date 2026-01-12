@@ -22,3 +22,23 @@
 
   .card-min { padding: 0; }
 .card-min .js-plotly-plot { width: 100% !important; }
+
+
+/* Contain external HTML chaos */
+.offers-raw {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* Normalize embedded content a bit */
+.offers-raw img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Prevent external CSS from breaking layout too much */
+.offers-raw * {
+  box-sizing: border-box;
+}
+
+/* Visual separation already handled via <hr> */

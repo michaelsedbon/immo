@@ -1,74 +1,151 @@
 {% extends "base.html" %}
+{% set active = "offers" %}
 {% block content %}
 
-<div class="d-flex align-items-baseline justify-content-between mb-3">
-  <div>
-    <h1 class="h4 mb-1">Offers</h1>
-    <div class="text-muted small">Scraped listings (asking prices) — parsed from saved HTML</div>
+<div class="mb-4">
+  <h1 class="h4 mb-1">Offers</h1>
+  <div class="text-muted small">
+    Extracted from saved HTML · {{ total }} offers matched
   </div>
 </div>
 
-<div class="row g-3 mb-4">
-  <div class="col-md-6">
-    <div class="card card-min">
-      <div class="card-body">
-        <div class="text-muted small">Offers loaded</div>
-        <div class="display-6">{{ stats.offers_rows }}</div>
-      </div>
-    </div>
+<form class="row g-2 align-items-end mb-3" method="get" action="/offers">
+  <div class="col-6 col-lg-2">
+    <label class="form-label small text-muted">Arrondissement</label>
+    <select class="form-select form-select-sm" name="arr">
+      <option value="">All</option>
+      {% for a in arr_options %}
+        <option value="{{ a }}" {% if f.arr == a|string %}selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
   </div>
-  <div class="col-md-6">
-    <div class="card card-min">
-      <div class="card-body">
-        <div class="text-muted small">Arrondissements covered</div>
-        <div class="display-6">{{ stats.offers_arrs }}</div>
-      </div>
-    </div>
+
+  <div class="col-6 col-lg-2">
+    <label class="form-label small text-muted">Rooms</label>
+    <select class="form-select form-select-sm" name="rooms">
+      <option value="">All</option>
+      {% for r in room_options %}
+        <option value="{{ r }}" {% if f.rooms == r|string %}selected{% endif %}>{{ r }}</option>
+      {% endfor %}
+    </select>
   </div>
-</div>
 
-{% if figs.offers_median_bar %}
-  <div class="card card-min mb-3">
-    <div class="card-body">
-      {{ figs.offers_median_bar|safe }}
-    </div>
+  <div class="col-6 col-lg-2">
+    <label class="form-label small text-muted">Price min (€)</label>
+    <input class="form-control form-control-sm" name="price_min" value="{{ f.price_min }}" placeholder="e.g. 300000">
   </div>
-{% endif %}
 
-{% if figs.offers_volume_bar %}
-  <div class="card card-min mb-3">
-    <div class="card-body">
-      {{ figs.offers_volume_bar|safe }}
-    </div>
+  <div class="col-6 col-lg-2">
+    <label class="form-label small text-muted">Price max (€)</label>
+    <input class="form-control form-control-sm" name="price_max" value="{{ f.price_max }}" placeholder="e.g. 900000">
   </div>
-{% endif %}
 
-<hr class="my-4">
+  <div class="col-6 col-lg-2">
+    <label class="form-label small text-muted">Surface min (m²)</label>
+    <input class="form-control form-control-sm" name="surf_min" value="{{ f.surf_min }}" placeholder="e.g. 30">
+  </div>
 
-<h2 class="h6 mb-2">Listings (first 50 rows)</h2>
+  <div class="col-6 col-lg-2">
+    <label class="form-label small text-muted">Surface max (m²)</label>
+    <input class="form-control form-control-sm" name="surf_max" value="{{ f.surf_max }}" placeholder="e.g. 80">
+  </div>
+
+  <div class="col-12 d-flex gap-2 mt-2">
+    <button class="btn btn-sm btn-dark" type="submit">Apply</button>
+    <a class="btn btn-sm btn-outline-secondary" href="/offers">Reset</a>
+  </div>
+
+  <input type="hidden" name="page" value="1">
+</form>
+
 <div class="table-responsive">
   <table class="table table-sm align-middle">
     <thead>
-      <tr>
-        {% for c in offers_cols %}
-          <th class="text-muted small">{{ c }}</th>
-        {% endfor %}
+      <tr class="text-muted small">
+        <th>Name</th>
+        <th class="text-end">Price</th>
+        <th class="text-end">Surface</th>
+        <th class="text-end">€/m²</th>
+        <th class="text-end">Rooms</th>
+        <th class="text-end">Arr</th>
+        <th>Date</th>
+        <th>Link</th>
       </tr>
     </thead>
+
     <tbody>
-      {% for row in offers_table %}
+      {% for o in offers %}
         <tr>
-          {% for c in offers_cols %}
-            {% if c == "url" and row.get(c) %}
-              <td class="small"><a href="{{ row.get(c) }}" target="_blank" rel="noopener">open</a></td>
-            {% else %}
-              <td class="small">{{ row.get(c, "") }}</td>
+          <td class="small" style="max-width: 420px;">
+            {{ o.get("name","") }}
+          </td>
+          <td class="text-end small">
+            {% if o.get("price_eur") %}{{ "{:,.0f}".format(o.get("price_eur")).replace(",", " ") }}{% endif %}
+          </td>
+          <td class="text-end small">
+            {% if o.get("surface_m2") %}{{ "{:.1f}".format(o.get("surface_m2")) }}{% endif %}
+          </td>
+          <td class="text-end small">
+            {% if o.get("eur_m2") %}{{ "{:,.0f}".format(o.get("eur_m2")).replace(",", " ") }}{% endif %}
+          </td>
+          <td class="text-end small">{{ o.get("rooms","") }}</td>
+          <td class="text-end small">{{ o.get("arrondissement","") }}</td>
+          <td class="small text-muted">{{ o.get("published_date","") }}</td>
+          <td class="small">
+            {% if o.get("url") %}
+              <a href="{{ o.get('url') }}" target="_blank" rel="noopener">open</a>
             {% endif %}
-          {% endfor %}
+          </td>
         </tr>
       {% endfor %}
+
+      {% if offers|length == 0 %}
+        <tr><td colspan="8" class="text-muted small">No offers match these filters.</td></tr>
+      {% endif %}
     </tbody>
   </table>
 </div>
+
+{% if total_pages > 1 %}
+<nav class="d-flex justify-content-between align-items-center mt-3">
+  <div class="text-muted small">
+    Page {{ page }} / {{ total_pages }}
+  </div>
+
+  <ul class="pagination pagination-sm mb-0">
+    {# Prev #}
+    <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+      <a class="page-link"
+         href="?arr={{ f.arr }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&surf_min={{ f.surf_min }}&surf_max={{ f.surf_max }}&page={{ page-1 }}">
+        Prev
+      </a>
+    </li>
+
+    {# Page numbers (compact) #}
+    {% for p in range(1, total_pages+1) %}
+      {% if p == 1 or p == total_pages or (p >= page-2 and p <= page+2) %}
+        <li class="page-item {% if p == page %}active{% endif %}">
+          <a class="page-link"
+             href="?arr={{ f.arr }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&surf_min={{ f.surf_min }}&surf_max={{ f.surf_max }}&page={{ p }}">
+            {{ p }}
+          </a>
+        </li>
+      {% elif p == 2 and page > 4 %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% elif p == total_pages-1 and page < total_pages-3 %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% endif %}
+    {% endfor %}
+
+    {# Next #}
+    <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+      <a class="page-link"
+         href="?arr={{ f.arr }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&surf_min={{ f.surf_min }}&surf_max={{ f.surf_max }}&page={{ page+1 }}">
+        Next
+      </a>
+    </li>
+  </ul>
+</nav>
+{% endif %}
 
 {% endblock %}

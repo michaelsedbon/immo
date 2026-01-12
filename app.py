@@ -5,6 +5,14 @@ import pandas as pd
 from flask import Flask, render_template
 import plotly.express as px
 
+from flask import request
+from bs4 import BeautifulSoup
+import re
+import math
+from urllib.parse import urljoin
+import pandas as pd
+from pathlib import Path
+
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
 
@@ -14,6 +22,33 @@ TRENDS_10Y_CSV   = DATA_DIR / "trends_10y.csv"          # arrondissement, price_
 OFFERS_CSV       = DATA_DIR / "offers_listings.csv"     # price_eur, surface_m2, ask_eur_m2, arrondissement, url, source_file, ...
 
 app = Flask(__name__)
+
+
+from bs4 import BeautifulSoup
+from pathlib import Path
+
+SCRAPES_DIR = Path(__file__).parent / "scrapes" / "figaro"
+
+def load_concatenated_offer_html():
+    """
+    Load all scraped HTML files, extract <body> content,
+    concatenate them in filename order.
+    """
+    blocks = []
+
+    files = sorted(SCRAPES_DIR.glob("*.html"))
+    for fp in files:
+        html = fp.read_text(encoding="utf-8", errors="ignore")
+        soup = BeautifulSoup(html, "html.parser")
+
+        body = soup.body
+        if body:
+            blocks.append(str(body))
+        else:
+            # fallback: include everything
+            blocks.append(html)
+
+    return "\n<hr style='margin:4rem 0; border-top:1px solid rgba(0,0,0,0.15);'>\n".join(blocks)
 
 
 def safe_read_csv(path: Path) -> pd.DataFrame:
@@ -227,29 +262,225 @@ def home():
 
     return render_template("home.html", sections=sections)
 
+
+
+
+
+
+###### ---------------- Scrapping offers ------------------------
+###### ---------------- Scrapping offers ------------------------
+###### ---------------- Scrapping offers ------------------------
+
+FIGARO_SCRAPE_DIR = Path(__file__).parent / "scrapes" / "figaro"
+FIGARO_BASE_URL = "https://immobilier.lefigaro.fr"
+
+def _parse_int_fr(s: str):
+    if s is None:
+        return None
+    s = str(s)
+    digits = re.sub(r"[^\d]", "", s)
+    return int(digits) if digits else None
+
+def _parse_float_fr(s: str):
+    if s is None:
+        return None
+    s = str(s)
+    m = re.search(r"(\d+(?:[.,]\d+)?)", s)
+    if not m:
+        return None
+    return float(m.group(1).replace(",", "."))
+
+def _extract_arrondissement(txt: str):
+    if not txt:
+        return None
+    m = re.search(r"Paris\s+(\d{1,2})\s*(?:e|ème|eme)\b", txt, flags=re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+def _extract_date(txt: str):
+    """Best-effort: look for dd/mm/yyyy or yyyy-mm-dd inside a block of text."""
+    if not txt:
+        return None
+    # 12/01/2026
+    m = re.search(r"\b(\d{1,2}/\d{1,2}/\d{4})\b", txt)
+    if m:
+        return m.group(1)
+    # 2026-01-12
+    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", txt)
+    if m:
+        return m.group(1)
+    return None
+
+def _parse_summary_line(txt: str):
+    """
+    Parse best-effort from a summary line containing e.g.
+    '499 000 € 10 778 €/m² Appartement 2 pièces 46,3 m² ... Paris 5ème (75)'
+    """
+    out = {
+        "name": None,
+        "price_eur": None,
+        "surface_m2": None,
+        "rooms": None,
+        "arrondissement": None,
+        "eur_m2": None,
+        "published_date": None,
+    }
+    t = " ".join(txt.split())
+    out["arrondissement"] = _extract_arrondissement(t)
+
+    m = re.search(r"([\d\s]+)\s*€", t)
+    out["price_eur"] = _parse_int_fr(m.group(0)) if m else None
+
+    m = re.search(r"([\d\s]+)\s*€/m²", t)
+    out["eur_m2"] = _parse_int_fr(m.group(0)) if m else None
+
+    m = re.search(r"(\d+)\s+pièces?", t, flags=re.IGNORECASE)
+    out["rooms"] = int(m.group(1)) if m else None
+
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*m²", t, flags=re.IGNORECASE)
+    out["surface_m2"] = float(m.group(1).replace(",", ".")) if m else None
+
+    out["published_date"] = _extract_date(t)
+
+    # name: try to remove leading price chunk to keep something readable
+    out["name"] = t
+    return out
+
+def load_figaro_offers_from_folder(folder: Path):
+    """
+    Parse all *.html in folder and extract offers.
+    Returns a pandas DataFrame with:
+      name, price_eur, surface_m2, arrondissement, eur_m2, rooms, published_date, url, source_file
+    """
+    folder = Path(folder)
+    files = sorted(folder.glob("*.html"))
+    rows = []
+
+    for fp in files:
+        html = fp.read_text(encoding="utf-8", errors="ignore")
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Strategy 1 (robust): find anchors that look like listing summaries
+        for a in soup.find_all("a"):
+            txt = " ".join(a.get_text(" ", strip=True).split())
+            if not txt:
+                continue
+            if ("€" in txt) and ("m²" in txt) and ("Paris" in txt):
+                # We avoid obvious non-listing junk by requiring at least a price marker
+                d = _parse_summary_line(txt)
+                if d["price_eur"] is None and d["eur_m2"] is None:
+                    continue
+
+                href = a.get("href")
+                url = urljoin(FIGARO_BASE_URL, href) if href else None
+
+                # Try to detect a nearby date in the parent block (best-effort)
+                parent_txt = ""
+                parent = a.parent
+                if parent:
+                    parent_txt = " ".join(parent.get_text(" ", strip=True).split())
+                if not d["published_date"]:
+                    d["published_date"] = _extract_date(parent_txt)
+
+                # Try to get a better name: prefer title attr / aria-label if present
+                name = a.get("title") or a.get("aria-label")
+                d["name"] = name.strip() if name else d["name"]
+
+                d["url"] = url
+                d["source_file"] = fp.name
+                rows.append(d)
+
+    df = pd.DataFrame(rows).drop_duplicates(subset=["url", "name", "price_eur", "surface_m2", "source_file"])
+
+    if df.empty:
+        return df
+
+    # compute eur_m2 if missing
+    df["eur_m2"] = pd.to_numeric(df["eur_m2"], errors="coerce")
+    df["price_eur"] = pd.to_numeric(df["price_eur"], errors="coerce")
+    df["surface_m2"] = pd.to_numeric(df["surface_m2"], errors="coerce")
+    df["rooms"] = pd.to_numeric(df["rooms"], errors="coerce")
+
+    mask = df["eur_m2"].isna() & df["price_eur"].notna() & df["surface_m2"].notna() & (df["surface_m2"] > 0)
+    df.loc[mask, "eur_m2"] = df.loc[mask, "price_eur"] / df.loc[mask, "surface_m2"]
+
+    # Keep plausible Paris offers
+    df["arrondissement"] = pd.to_numeric(df["arrondissement"], errors="coerce")
+    df = df[df["arrondissement"].between(1, 20)]
+    df = df[df["eur_m2"].between(1000, 50000)]
+    df = df[df["price_eur"].between(10_000, 50_000_000)]
+
+    # normalize date: keep as string (we can parse later if you want)
+    df["published_date"] = df["published_date"].fillna("")
+
+    # sort: if date available, later first; else by file order
+    # (string sort works for yyyy-mm-dd; for dd/mm/yyyy it’s imperfect but ok)
+    df = df.sort_values(by=["published_date", "source_file"], ascending=[False, True])
+
+    return df.reset_index(drop=True)
+
+
+###### ---------------- Scrapping offers ------------------------
+###### ---------------- Scrapping offers ------------------------
+###### ---------------- Scrapping offers ------------------------
+
 @app.route("/offers")
 def offers():
-    offers = safe_read_csv(OFFERS_CSV)
+    df = load_figaro_offers_from_folder(FIGARO_SCRAPE_DIR)
 
-    stats = {
-        "offers_rows": int(len(offers)) if not offers.empty else 0,
-        "offers_arrs": int(offers["arrondissement"].nunique()) if (not offers.empty and "arrondissement" in offers.columns) else 0,
-    }
+    # --- read filters from query params ---
+    arr = request.args.get("arr", "").strip()
+    price_min = request.args.get("price_min", "").strip()
+    price_max = request.args.get("price_max", "").strip()
+    surf_min = request.args.get("surf_min", "").strip()
+    surf_max = request.args.get("surf_max", "").strip()
+    rooms = request.args.get("rooms", "").strip()
+    page = int(request.args.get("page", "1") or 1)
 
-    figs = build_offers_figs(offers)
+    if not df.empty:
+        if arr:
+            df = df[df["arrondissement"] == int(arr)]
+        if rooms:
+            df = df[df["rooms"] == int(rooms)]
+        if price_min:
+            df = df[df["price_eur"] >= int(price_min)]
+        if price_max:
+            df = df[df["price_eur"] <= int(price_max)]
+        if surf_min:
+            df = df[df["surface_m2"] >= float(surf_min)]
+        if surf_max:
+            df = df[df["surface_m2"] <= float(surf_max)]
 
-    # show latest / first rows
-    offers_table = offers.head(50).to_dict(orient="records") if not offers.empty else []
-    offers_cols = list(offers.columns)
+    # --- pagination ---
+    PAGE_SIZE = 30
+    total = len(df)
+    total_pages = max(1, math.ceil(total / PAGE_SIZE))
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * PAGE_SIZE
+    end = start + PAGE_SIZE
+    page_df = df.iloc[start:end].copy()
+
+    # Build options for filters (based on available data)
+    arr_options = list(range(1, 21))
+    room_options = sorted([int(x) for x in page_df["rooms"].dropna().unique()]) if not df.empty else [1,2,3,4,5]
 
     return render_template(
         "offers.html",
-        stats=stats,
-        figs=figs,
-        offers_cols=offers_cols,
-        offers_table=offers_table,
+        offers=page_df.to_dict(orient="records"),
+        total=total,
+        page=page,
+        total_pages=total_pages,
+        arr_options=arr_options,
+        room_options=sorted(set(room_options + [1,2,3,4,5])),
+        # keep current filters to prefill form
+        f={
+            "arr": arr,
+            "price_min": price_min,
+            "price_max": price_max,
+            "surf_min": surf_min,
+            "surf_max": surf_max,
+            "rooms": rooms,
+        },
     )
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
