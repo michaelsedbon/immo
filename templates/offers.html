@@ -9,15 +9,87 @@
   </div>
 </div>
 
+{# ---------------------------
+   Helpers to build querystrings
+   qs is dict: key -> [values...]
+---------------------------- #}
+{% macro build_qs(qs_dict, overrides={}) -%}
+  {# copy base #}
+  {%- set parts = [] -%}
+
+  {# merge overrides: if overrides has key -> value or list.
+     if overrides[key] is none => remove key.
+  #}
+
+  {# First, output keys from base unless overridden/removed #}
+  {%- for k, vals in qs_dict.items() -%}
+    {%- if k in overrides -%}
+      {# handled later #}
+    {%- else -%}
+      {%- for v in vals -%}
+        {%- if v is not none and v|string != "" -%}
+          {%- set _ = parts.append(k ~ "=" ~ v|urlencode) -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {# Now add overrides #}
+  {%- for k, v in overrides.items() -%}
+    {%- if v is none -%}
+      {# remove #}
+    {%- elif v is sequence and (v is not string) -%}
+      {%- for vv in v -%}
+        {%- if vv is not none and vv|string != "" -%}
+          {%- set _ = parts.append(k ~ "=" ~ vv|urlencode) -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- else -%}
+      {%- if v|string != "" -%}
+        {%- set _ = parts.append(k ~ "=" ~ v|urlencode) -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {{ parts|join("&") }}
+{%- endmacro %}
+
+{% macro sort_link(label, col) -%}
+  {# toggle dir if currently sorting on same col #}
+  {% set next_dir = "asc" %}
+  {% if f.sort == col and f.dir == "asc" %}
+    {% set next_dir = "desc" %}
+  {% elif f.sort == col and f.dir == "desc" %}
+    {% set next_dir = "asc" %}
+  {% else %}
+    {% set next_dir = "asc" %}
+  {% endif %}
+
+  {% set arrow = "" %}
+  {% if f.sort == col %}
+    {% if f.dir == "asc" %}{% set arrow = " ▲" %}{% else %}{% set arrow = " ▼" %}{% endif %}
+  {% endif %}
+
+  {% if not baseline_loaded %}
+  <div class="alert alert-light border small">
+    Market baseline not found. Export <code>data/market_baseline_eurm2.csv</code> to enable Premium %.
+  </div>
+{% endif %}
+
+  <a class="text-decoration-none" href="/offers?{{ build_qs(qs, {'sort': col, 'dir': next_dir, 'page': 1}) }}">
+    {{ label }}<span class="text-muted">{{ arrow }}</span>
+  </a>
+{%- endmacro %}
+
 <form class="row g-2 align-items-end mb-3" method="get" action="/offers">
-  <div class="col-6 col-lg-2">
-    <label class="form-label small text-muted">Arrondissement</label>
-    <select class="form-select form-select-sm" name="arr">
-      <option value="">All</option>
+  <div class="col-12 col-lg-3">
+    <label class="form-label small text-muted">Arrondissements</label>
+    <select class="form-select form-select-sm" name="arr" multiple size="6">
       {% for a in arr_options %}
-        <option value="{{ a }}" {% if f.arr == a|string %}selected{% endif %}>{{ a }}</option>
+        <option value="{{ a }}" {% if a|string in f.arr %}selected{% endif %}>{{ a }}</option>
       {% endfor %}
     </select>
+    <div class="text-muted small mt-1">Cmd/Ctrl-click to select multiple.</div>
   </div>
 
   <div class="col-6 col-lg-2">
@@ -32,68 +104,82 @@
 
   <div class="col-6 col-lg-2">
     <label class="form-label small text-muted">Price min (€)</label>
-    <input class="form-control form-control-sm" name="price_min" value="{{ f.price_min }}" placeholder="e.g. 300000">
+    <input class="form-control form-control-sm" name="price_min" value="{{ f.price_min }}" placeholder="300000">
   </div>
 
   <div class="col-6 col-lg-2">
     <label class="form-label small text-muted">Price max (€)</label>
-    <input class="form-control form-control-sm" name="price_max" value="{{ f.price_max }}" placeholder="e.g. 900000">
+    <input class="form-control form-control-sm" name="price_max" value="{{ f.price_max }}" placeholder="900000">
   </div>
 
-  <div class="col-6 col-lg-2">
-    <label class="form-label small text-muted">Surface min (m²)</label>
-    <input class="form-control form-control-sm" name="surf_min" value="{{ f.surf_min }}" placeholder="e.g. 30">
+  <div class="col-6 col-lg-1">
+    <label class="form-label small text-muted">m² min</label>
+    <input class="form-control form-control-sm" name="surf_min" value="{{ f.surf_min }}" placeholder="30">
   </div>
 
-  <div class="col-6 col-lg-2">
-    <label class="form-label small text-muted">Surface max (m²)</label>
-    <input class="form-control form-control-sm" name="surf_max" value="{{ f.surf_max }}" placeholder="e.g. 80">
+  <div class="col-6 col-lg-1">
+    <label class="form-label small text-muted">m² max</label>
+    <input class="form-control form-control-sm" name="surf_max" value="{{ f.surf_max }}" placeholder="80">
   </div>
+
+  {# keep sort state when applying filters #}
+  <input type="hidden" name="sort" value="{{ f.sort }}">
+  <input type="hidden" name="dir" value="{{ f.dir }}">
+  <input type="hidden" name="page" value="1">
 
   <div class="col-12 d-flex gap-2 mt-2">
     <button class="btn btn-sm btn-dark" type="submit">Apply</button>
     <a class="btn btn-sm btn-outline-secondary" href="/offers">Reset</a>
   </div>
-
-  <input type="hidden" name="page" value="1">
 </form>
 
 <div class="table-responsive">
   <table class="table table-sm align-middle">
     <thead>
       <tr class="text-muted small">
-        <th>Name</th>
-        <th class="text-end">Price</th>
-        <th class="text-end">Surface</th>
-        <th class="text-end">€/m²</th>
-        <th class="text-end">Rooms</th>
-        <th class="text-end">Arr</th>
-        <th>Date</th>
+        <th>{{ sort_link("Name", "name") }}</th>
+        <th class="text-end">{{ sort_link("Price", "price_eur") }}</th>
+        <th class="text-end">{{ sort_link("Surface", "surface_m2") }}</th>
+        <th class="text-end">{{ sort_link("€/m²", "eur_m2") }}</th>
+        <th class="text-end">{{ sort_link("Rooms", "rooms") }}</th>
+        <th class="text-end">{{ sort_link("Arr", "arrondissement") }}</th>
+        <th>{{ sort_link("Date", "published_date") }}</th>
         <th>Link</th>
+        <th class="text-end">{{ sort_link("Premium %", "premium_pct") }}</th>
       </tr>
     </thead>
 
     <tbody>
       {% for o in offers %}
         <tr>
-          <td class="small" style="max-width: 420px;">
-            {{ o.get("name","") }}
-          </td>
+          <td class="small" style="max-width: 420px;">{{ o.get("name","") }}</td>
+
           <td class="text-end small">
             {% if o.get("price_eur") %}{{ "{:,.0f}".format(o.get("price_eur")).replace(",", " ") }}{% endif %}
           </td>
+
           <td class="text-end small">
             {% if o.get("surface_m2") %}{{ "{:.1f}".format(o.get("surface_m2")) }}{% endif %}
           </td>
+
           <td class="text-end small">
             {% if o.get("eur_m2") %}{{ "{:,.0f}".format(o.get("eur_m2")).replace(",", " ") }}{% endif %}
           </td>
+
           <td class="text-end small">{{ o.get("rooms","") }}</td>
           <td class="text-end small">{{ o.get("arrondissement","") }}</td>
           <td class="small text-muted">{{ o.get("published_date","") }}</td>
+
           <td class="small">
             {% if o.get("url") %}
               <a href="{{ o.get('url') }}" target="_blank" rel="noopener">open</a>
+            {% endif %}
+          </td>
+          <td class="text-end small">
+            {% if o.get("premium_pct") is not none and o.get("premium_pct") != "" %}
+              {{ "{:+.1f}%".format(o.get("premium_pct")) }}
+            {% else %}
+              <span class="text-muted">—</span>
             {% endif %}
           </td>
         </tr>
@@ -108,27 +194,17 @@
 
 {% if total_pages > 1 %}
 <nav class="d-flex justify-content-between align-items-center mt-3">
-  <div class="text-muted small">
-    Page {{ page }} / {{ total_pages }}
-  </div>
+  <div class="text-muted small">Page {{ page }} / {{ total_pages }}</div>
 
   <ul class="pagination pagination-sm mb-0">
-    {# Prev #}
     <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-      <a class="page-link"
-         href="?arr={{ f.arr }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&surf_min={{ f.surf_min }}&surf_max={{ f.surf_max }}&page={{ page-1 }}">
-        Prev
-      </a>
+      <a class="page-link" href="/offers?{{ build_qs(qs, {'page': page-1}) }}">Prev</a>
     </li>
 
-    {# Page numbers (compact) #}
     {% for p in range(1, total_pages+1) %}
       {% if p == 1 or p == total_pages or (p >= page-2 and p <= page+2) %}
         <li class="page-item {% if p == page %}active{% endif %}">
-          <a class="page-link"
-             href="?arr={{ f.arr }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&surf_min={{ f.surf_min }}&surf_max={{ f.surf_max }}&page={{ p }}">
-            {{ p }}
-          </a>
+          <a class="page-link" href="/offers?{{ build_qs(qs, {'page': p}) }}">{{ p }}</a>
         </li>
       {% elif p == 2 and page > 4 %}
         <li class="page-item disabled"><span class="page-link">…</span></li>
@@ -137,12 +213,8 @@
       {% endif %}
     {% endfor %}
 
-    {# Next #}
     <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-      <a class="page-link"
-         href="?arr={{ f.arr }}&rooms={{ f.rooms }}&price_min={{ f.price_min }}&price_max={{ f.price_max }}&surf_min={{ f.surf_min }}&surf_max={{ f.surf_max }}&page={{ page+1 }}">
-        Next
-      </a>
+      <a class="page-link" href="/offers?{{ build_qs(qs, {'page': page+1}) }}">Next</a>
     </li>
   </ul>
 </nav>

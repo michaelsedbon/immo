@@ -16,6 +16,8 @@ from pathlib import Path
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
 
+MARKET_BASELINE_CSV = DATA_DIR / "market_baseline_eurm2.csv"
+
 # Expected CSVs (rename to match your exports if needed)
 DVF_SUMMARY_CSV = DATA_DIR / "dvf_summary.csv"          # arrondissement, dvf_median_eur_m2, nb_ventes, etc.
 TRENDS_10Y_CSV   = DATA_DIR / "trends_10y.csv"          # arrondissement, price_trend_pct_per_year, volume_trend_pct_per_year
@@ -274,6 +276,25 @@ def home():
 FIGARO_SCRAPE_DIR = Path(__file__).parent / "scrapes" / "figaro"
 FIGARO_BASE_URL = "https://immobilier.lefigaro.fr"
 
+def load_market_baseline_map():
+    """
+    Returns dict: arrondissement(int) -> market_eur_m2(float)
+    CSV required columns: arrondissement, market_eur_m2
+    """
+    if not MARKET_BASELINE_CSV.exists():
+        return {}
+
+    base = pd.read_csv(MARKET_BASELINE_CSV)
+    if "arrondissement" not in base.columns or "market_eur_m2" not in base.columns:
+        raise ValueError("market_baseline_eurm2.csv must contain: arrondissement, market_eur_m2")
+
+    base = base.dropna(subset=["arrondissement", "market_eur_m2"]).copy()
+    base["arrondissement"] = base["arrondissement"].astype(int)
+    base["market_eur_m2"] = pd.to_numeric(base["market_eur_m2"], errors="coerce")
+    base = base.dropna(subset=["market_eur_m2"])
+
+    return dict(zip(base["arrondissement"], base["market_eur_m2"]))
+
 def _parse_int_fr(s: str):
     if s is None:
         return None
@@ -423,35 +444,69 @@ def load_figaro_offers_from_folder(folder: Path):
 ###### ---------------- Scrapping offers ------------------------
 ###### ---------------- Scrapping offers ------------------------
 
+
 @app.route("/offers")
 def offers():
     df = load_figaro_offers_from_folder(FIGARO_SCRAPE_DIR)
-
-    # --- read filters from query params ---
-    arr = request.args.get("arr", "").strip()
-    price_min = request.args.get("price_min", "").strip()
-    price_max = request.args.get("price_max", "").strip()
-    surf_min = request.args.get("surf_min", "").strip()
-    surf_max = request.args.get("surf_max", "").strip()
-    rooms = request.args.get("rooms", "").strip()
-    page = int(request.args.get("page", "1") or 1)
+    baseline_map = load_market_baseline_map()
 
     if not df.empty:
-        if arr:
-            df = df[df["arrondissement"] == int(arr)]
+        df["market_eur_m2"] = df["arrondissement"].map(baseline_map)
+        df["premium_pct"] = (df["eur_m2"] / df["market_eur_m2"] - 1.0) * 100.0
+
+    # ---- filters (multi-select arr) ----
+    arr_list = request.args.getlist("arr")  # multi
+    rooms = request.args.get("rooms", "").strip()
+    price_min = request.args.get("price_min", "").strip()
+    price_max = request.args.get("price_max", "").strip()
+    surf_min  = request.args.get("surf_min", "").strip()
+    surf_max  = request.args.get("surf_max", "").strip()
+
+    # ---- sorting ----
+    sort_by  = request.args.get("sort", "published_date").strip()
+    sort_dir = request.args.get("dir", "desc").strip().lower()  # asc/desc
+
+    allowed_sort = {
+        "name", "price_eur", "surface_m2", "eur_m2", "rooms", "arrondissement", "published_date", "premium_pct"
+    }
+    if sort_by not in allowed_sort:
+        sort_by = "published_date"
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "desc"
+    ascending = (sort_dir == "asc")
+
+    # ---- pagination ----
+    page = int(request.args.get("page", "1") or 1)
+    PAGE_SIZE = 30
+
+    # Apply filters
+    if not df.empty:
+        if arr_list:
+            arr_ints = [int(a) for a in arr_list if str(a).isdigit()]
+            df = df[df["arrondissement"].isin(arr_ints)]
+
         if rooms:
             df = df[df["rooms"] == int(rooms)]
+
         if price_min:
             df = df[df["price_eur"] >= int(price_min)]
         if price_max:
             df = df[df["price_eur"] <= int(price_max)]
+
         if surf_min:
             df = df[df["surface_m2"] >= float(surf_min)]
         if surf_max:
             df = df[df["surface_m2"] <= float(surf_max)]
 
-    # --- pagination ---
-    PAGE_SIZE = 30
+        # Sort (stable, keep NaNs at bottom)
+        if sort_by in df.columns:
+            df = df.sort_values(
+                by=[sort_by],
+                ascending=ascending,
+                na_position="last",
+                kind="mergesort",  # stable
+            )
+
     total = len(df)
     total_pages = max(1, math.ceil(total / PAGE_SIZE))
     page = max(1, min(page, total_pages))
@@ -459,10 +514,14 @@ def offers():
     end = start + PAGE_SIZE
     page_df = df.iloc[start:end].copy()
 
-    # Build options for filters (based on available data)
+    # Filter options
     arr_options = list(range(1, 21))
-    room_options = sorted([int(x) for x in page_df["rooms"].dropna().unique()]) if not df.empty else [1,2,3,4,5]
+    room_options = [1, 2, 3, 4, 5]
 
+    # Preserve current query params for pagination + sorting links (including multi-values)
+    qs = request.args.to_dict(flat=False)
+
+    baseline_loaded = len(baseline_map) > 0
     return render_template(
         "offers.html",
         offers=page_df.to_dict(orient="records"),
@@ -470,16 +529,19 @@ def offers():
         page=page,
         total_pages=total_pages,
         arr_options=arr_options,
-        room_options=sorted(set(room_options + [1,2,3,4,5])),
-        # keep current filters to prefill form
+        room_options=room_options,
+        qs=qs,  # dict[str, list[str]]
         f={
-            "arr": arr,
+            "arr": arr_list,  # list
+            "rooms": rooms,
             "price_min": price_min,
             "price_max": price_max,
             "surf_min": surf_min,
             "surf_max": surf_max,
-            "rooms": rooms,
+            "sort": sort_by,
+            "dir": sort_dir,
         },
+        baseline_loaded=baseline_loaded,
     )
 
 if __name__ == "__main__":
