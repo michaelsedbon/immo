@@ -13,8 +13,96 @@ from urllib.parse import urljoin
 import pandas as pd
 from pathlib import Path
 
+import sqlite3
+from datetime import datetime
+from flask import redirect, url_for
+import hashlib
+
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
+
+DB_PATH = Path(__file__).parent / "data" / "app_state.sqlite"
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def db_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    with db_conn() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS offer_state (
+            offer_id TEXT PRIMARY KEY,
+            status TEXT DEFAULT 'new',      -- new | kept | discarded
+            contacted INTEGER DEFAULT 0,    -- 0/1
+            notes TEXT DEFAULT '',
+            updated_at TEXT
+        )
+        """)
+        conn.commit()
+
+def compute_offer_id(row: dict) -> str:
+    """
+    Stable ID: prefer url; fallback to a hash of key fields.
+    """
+    url = (row.get("url") or "").strip()
+    if url:
+        return "url:" + url
+    key = "|".join([
+        str(row.get("name","")).strip(),
+        str(row.get("price_eur","")).strip(),
+        str(row.get("surface_m2","")).strip(),
+        str(row.get("rooms","")).strip(),
+        str(row.get("arrondissement","")).strip(),
+        str(row.get("source_file","")).strip(),
+    ])
+    return "hash:" + hashlib.sha1(key.encode("utf-8", errors="ignore")).hexdigest()
+
+def get_states_map(offer_ids):
+    if not offer_ids:
+        return {}
+    qmarks = ",".join(["?"] * len(offer_ids))
+    with db_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM offer_state WHERE offer_id IN ({qmarks})",
+            offer_ids
+        ).fetchall()
+    return {r["offer_id"]: dict(r) for r in rows}
+
+def upsert_state(offer_id: str, status=None, contacted=None, notes=None):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    with db_conn() as conn:
+        existing = conn.execute(
+            "SELECT offer_id, status, contacted, notes FROM offer_state WHERE offer_id=?",
+            (offer_id,)
+        ).fetchone()
+
+        if existing is None:
+            conn.execute(
+                "INSERT INTO offer_state (offer_id, status, contacted, notes, updated_at) VALUES (?,?,?,?,?)",
+                (
+                    offer_id,
+                    status or "new",
+                    int(contacted) if contacted is not None else 0,
+                    notes or "",
+                    now
+                )
+            )
+        else:
+            # update only provided fields, keep others
+            new_status = status if status is not None else existing["status"]
+            new_contacted = int(contacted) if contacted is not None else existing["contacted"]
+            new_notes = notes if notes is not None else existing["notes"]
+            conn.execute(
+                "UPDATE offer_state SET status=?, contacted=?, notes=?, updated_at=? WHERE offer_id=?",
+                (new_status, new_contacted, new_notes, now, offer_id)
+            )
+        conn.commit()
+
+
+
 
 MARKET_BASELINE_CSV = DATA_DIR / "market_baseline_eurm2.csv"
 
@@ -24,10 +112,13 @@ TRENDS_10Y_CSV   = DATA_DIR / "trends_10y.csv"          # arrondissement, price_
 OFFERS_CSV       = DATA_DIR / "offers_listings.csv"     # price_eur, surface_m2, ask_eur_m2, arrondissement, url, source_file, ...
 
 app = Flask(__name__)
+init_db()
 
 
 from bs4 import BeautifulSoup
 from pathlib import Path
+
+
 
 SCRAPES_DIR = Path(__file__).parent / "scrapes" / "figaro"
 
@@ -444,30 +535,33 @@ def load_figaro_offers_from_folder(folder: Path):
 ###### ---------------- Scrapping offers ------------------------
 ###### ---------------- Scrapping offers ------------------------
 
-
+# -----------------------------
+# OFFERS ROUTE (paste as-is)
+# -----------------------------
 @app.route("/offers")
 def offers():
     df = load_figaro_offers_from_folder(FIGARO_SCRAPE_DIR)
-    baseline_map = load_market_baseline_map()
 
-    if not df.empty:
-        df["market_eur_m2"] = df["arrondissement"].map(baseline_map)
-        df["premium_pct"] = (df["eur_m2"] / df["market_eur_m2"] - 1.0) * 100.0
-
-    # ---- filters (multi-select arr) ----
-    arr_list = request.args.getlist("arr")  # multi
-    rooms = request.args.get("rooms", "").strip()
+    # ---- filters (multi arr + numeric) ----
+    arr_list  = request.args.getlist("arr")  # multi
+    rooms     = request.args.get("rooms", "").strip()
     price_min = request.args.get("price_min", "").strip()
     price_max = request.args.get("price_max", "").strip()
     surf_min  = request.args.get("surf_min", "").strip()
     surf_max  = request.args.get("surf_max", "").strip()
 
+    # ---- status/contacted filters (checkboxes) ----
+    status_list = request.args.getlist("status")  # kept/discarded/new
+    contacted_only = (request.args.get("contacted_only", "").strip() == "1")
+
     # ---- sorting ----
     sort_by  = request.args.get("sort", "published_date").strip()
-    sort_dir = request.args.get("dir", "desc").strip().lower()  # asc/desc
+    sort_dir = request.args.get("dir", "desc").strip().lower()
 
     allowed_sort = {
-        "name", "price_eur", "surface_m2", "eur_m2", "rooms", "arrondissement", "published_date", "premium_pct"
+        "name", "price_eur", "surface_m2", "eur_m2", "premium_pct",
+        "rooms", "arrondissement", "published_date",
+        "status", "contacted"
     }
     if sort_by not in allowed_sort:
         sort_by = "published_date"
@@ -475,74 +569,172 @@ def offers():
         sort_dir = "desc"
     ascending = (sort_dir == "asc")
 
-    # ---- pagination ----
-    page = int(request.args.get("page", "1") or 1)
-    PAGE_SIZE = 30
+    # ---- baseline premium ----
+    baseline_map = load_market_baseline_map()
+    baseline_loaded = len(baseline_map) > 0
+    if not df.empty and baseline_loaded:
+        df = df.copy()
+        df["market_eur_m2"] = df["arrondissement"].map(baseline_map)
+        df["premium_pct"] = (df["eur_m2"] / df["market_eur_m2"] - 1.0) * 100.0
 
-    # Apply filters
+    # ---- apply numeric filters ----
     if not df.empty:
         if arr_list:
             arr_ints = [int(a) for a in arr_list if str(a).isdigit()]
             df = df[df["arrondissement"].isin(arr_ints)]
-
         if rooms:
             df = df[df["rooms"] == int(rooms)]
-
         if price_min:
             df = df[df["price_eur"] >= int(price_min)]
         if price_max:
             df = df[df["price_eur"] <= int(price_max)]
-
         if surf_min:
             df = df[df["surface_m2"] >= float(surf_min)]
         if surf_max:
             df = df[df["surface_m2"] <= float(surf_max)]
 
-        # Sort (stable, keep NaNs at bottom)
-        if sort_by in df.columns:
-            df = df.sort_values(
-                by=[sort_by],
-                ascending=ascending,
-                na_position="last",
-                kind="mergesort",  # stable
-            )
+    # ---- attach offer_id + persisted state for ALL filtered rows (needed for status/contacted filters) ----
+    if not df.empty:
+        df = df.copy()
+        df["offer_id"] = df.apply(lambda r: compute_offer_id(r.to_dict()), axis=1)
 
+        states = get_states_map(df["offer_id"].tolist())
+
+        def attach_state(row):
+            st = states.get(row["offer_id"])
+            if not st:
+                return pd.Series({"status": "new", "contacted": 0, "notes": ""})
+            return pd.Series({
+                "status": st.get("status", "new"),
+                "contacted": st.get("contacted", 0),
+                "notes": st.get("notes", "") or ""
+            })
+
+        df[["status", "contacted", "notes"]] = df.apply(attach_state, axis=1)
+    else:
+        df = df.copy()
+        df["offer_id"] = pd.Series(dtype=str)
+        df["status"] = pd.Series(dtype=str)
+        df["contacted"] = pd.Series(dtype=int)
+        df["notes"] = pd.Series(dtype=str)
+
+    # ---- apply status/contacted filters (checkboxes) ----
+    if not df.empty:
+        if status_list:
+            df = df[df["status"].isin(status_list)]
+        if contacted_only:
+            df = df[df["contacted"] == 1]
+
+    # ---- sort AFTER state join so sorting by status/contacted works ----
+    if not df.empty and sort_by in df.columns:
+        df = df.sort_values(
+            by=sort_by,
+            ascending=ascending,
+            na_position="last",
+            kind="mergesort"
+        )
+
+    # ---- pagination ----
+    PAGE_SIZE = 30
     total = len(df)
     total_pages = max(1, math.ceil(total / PAGE_SIZE))
+    page = int(request.args.get("page", "1") or 1)
     page = max(1, min(page, total_pages))
     start = (page - 1) * PAGE_SIZE
     end = start + PAGE_SIZE
     page_df = df.iloc[start:end].copy()
 
-    # Filter options
-    arr_options = list(range(1, 21))
-    room_options = [1, 2, 3, 4, 5]
-
-    # Preserve current query params for pagination + sorting links (including multi-values)
+    # ---- querystring state + back url for POST redirects ----
     qs = request.args.to_dict(flat=False)
+    if "page" not in qs:
+        qs["page"] = [str(page)]
 
-    baseline_loaded = len(baseline_map) > 0
+    current_url = request.full_path
+    if current_url.endswith("?"):
+        current_url = current_url[:-1]
+
     return render_template(
         "offers.html",
         offers=page_df.to_dict(orient="records"),
         total=total,
         page=page,
         total_pages=total_pages,
-        arr_options=arr_options,
-        room_options=room_options,
-        qs=qs,  # dict[str, list[str]]
+        arr_options=list(range(1, 21)),
+        room_options=[1, 2, 3, 4, 5],
+        baseline_loaded=baseline_loaded,
+        qs=qs,
+        current_url=current_url,
         f={
-            "arr": arr_list,  # list
+            "arr": arr_list,
             "rooms": rooms,
             "price_min": price_min,
             "price_max": price_max,
             "surf_min": surf_min,
             "surf_max": surf_max,
+            "status": status_list,               # list
+            "contacted_only": "1" if contacted_only else "",
             "sort": sort_by,
             "dir": sort_dir,
-        },
-        baseline_loaded=baseline_loaded,
+        }
     )
+
+###### ---------------- interaction database ------------------------
+###### ---------------- interaction database ------------------------
+###### ---------------- interaction database ------------------------
+
+@app.post("/offers/set_status")
+def offers_set_status():
+    offer_id = request.form.get("offer_id", "")
+    status = request.form.get("status", "")
+    back = (request.form.get("back") or "").strip()
+
+    # hard fallback
+    if not back or back == ".":
+        back = "/offers"
+
+    # basic safety: keep redirects internal
+    if not back.startswith("/"):
+        back = "/offers"
+
+    if offer_id and status in {"new", "kept", "discarded"}:
+        upsert_state(offer_id, status=status)
+
+    return redirect(back)
+
+@app.post("/offers/toggle_contacted")
+def offers_toggle_contacted():
+    offer_id = request.form.get("offer_id", "")
+    contacted = request.form.get("contacted", "0")
+    back = (request.form.get("back") or "").strip()
+
+    # ✅ SAME FALLBACK BLOCK
+    if not back or back == ".":
+        back = "/offers"
+    if not back.startswith("/"):
+        back = "/offers"
+
+    if offer_id:
+        upsert_state(offer_id, contacted=(contacted == "1"))
+
+    return redirect(back)
+
+
+@app.post("/offers/save_notes")
+def offers_save_notes():
+    offer_id = request.form.get("offer_id", "")
+    notes = request.form.get("notes", "")
+    back = (request.form.get("back") or "").strip()
+
+    # ✅ SAME FALLBACK BLOCK
+    if not back or back == ".":
+        back = "/offers"
+    if not back.startswith("/"):
+        back = "/offers"
+
+    if offer_id:
+        upsert_state(offer_id, notes=notes)
+
+    return redirect(back)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

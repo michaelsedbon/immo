@@ -1,222 +1,307 @@
+{# -----------------------------
+  templates/offers.html
+  (paste as-is)
+  ----------------------------- #}
 {% extends "base.html" %}
 {% set active = "offers" %}
 {% block content %}
 
+{# ============ Querystring helpers ============ #}
+{% macro qs_build(qs, overrides={}) -%}
+ {%- set parts = [] -%}
+
+ {%- for k, vals in qs.items() -%}
+   {%- if k in overrides -%}
+   {%- else -%}
+     {%- for v in vals -%}
+       {%- if v is not none and v|string != "" -%}
+         {%- set _ = parts.append(k ~ "=" ~ v|urlencode) -%}
+       {%- endif -%}
+     {%- endfor -%}
+   {%- endif -%}
+ {%- endfor -%}
+
+ {%- for k, v in overrides.items() -%}
+   {%- if v is none -%}
+   {%- elif v is sequence and (v is not string) -%}
+     {%- for vv in v -%}
+       {%- if vv is not none and vv|string != "" -%}
+         {%- set _ = parts.append(k ~ "=" ~ vv|urlencode) -%}
+       {%- endif -%}
+     {%- endfor -%}
+   {%- else -%}
+     {%- if v|string != "" -%}
+       {%- set _ = parts.append(k ~ "=" ~ v|urlencode) -%}
+     {%- endif -%}
+   {%- endif -%}
+ {%- endfor -%}
+
+ {{ parts|join("&") }}
+{%- endmacro %}
+
+{% macro sort_link(label, col, current_sort, current_dir, qs) -%}
+ {% set next_dir = "asc" %}
+ {% if current_sort == col and current_dir == "asc" %}
+   {% set next_dir = "desc" %}
+ {% elif current_sort == col and current_dir == "desc" %}
+   {% set next_dir = "asc" %}
+ {% endif %}
+
+ {% set arrow = "" %}
+ {% if current_sort == col %}
+   {% if current_dir == "asc" %}{% set arrow = " ▲" %}{% else %}{% set arrow = " ▼" %}{% endif %}
+ {% endif %}
+
+ <a class="text-decoration-none"
+    href="/offers?{{ qs_build(qs, {'sort': col, 'dir': next_dir, 'page': '1'}) }}">
+   {{ label }}<span class="text-muted">{{ arrow }}</span>
+ </a>
+{%- endmacro %}
+
 <div class="mb-4">
-  <h1 class="h4 mb-1">Offers</h1>
-  <div class="text-muted small">
-    Extracted from saved HTML · {{ total }} offers matched
-  </div>
+ <h1 class="h4 mb-1">Offers</h1>
+ <div class="text-muted small">
+   Extracted from saved HTML · {{ total }} offers matched
+ </div>
 </div>
 
-{# ---------------------------
-   Helpers to build querystrings
-   qs is dict: key -> [values...]
----------------------------- #}
-{% macro build_qs(qs_dict, overrides={}) -%}
-  {# copy base #}
-  {%- set parts = [] -%}
-
-  {# merge overrides: if overrides has key -> value or list.
-     if overrides[key] is none => remove key.
-  #}
-
-  {# First, output keys from base unless overridden/removed #}
-  {%- for k, vals in qs_dict.items() -%}
-    {%- if k in overrides -%}
-      {# handled later #}
-    {%- else -%}
-      {%- for v in vals -%}
-        {%- if v is not none and v|string != "" -%}
-          {%- set _ = parts.append(k ~ "=" ~ v|urlencode) -%}
-        {%- endif -%}
-      {%- endfor -%}
-    {%- endif -%}
-  {%- endfor -%}
-
-  {# Now add overrides #}
-  {%- for k, v in overrides.items() -%}
-    {%- if v is none -%}
-      {# remove #}
-    {%- elif v is sequence and (v is not string) -%}
-      {%- for vv in v -%}
-        {%- if vv is not none and vv|string != "" -%}
-          {%- set _ = parts.append(k ~ "=" ~ vv|urlencode) -%}
-        {%- endif -%}
-      {%- endfor -%}
-    {%- else -%}
-      {%- if v|string != "" -%}
-        {%- set _ = parts.append(k ~ "=" ~ v|urlencode) -%}
-      {%- endif -%}
-    {%- endif -%}
-  {%- endfor -%}
-
-  {{ parts|join("&") }}
-{%- endmacro %}
-
-{% macro sort_link(label, col) -%}
-  {# toggle dir if currently sorting on same col #}
-  {% set next_dir = "asc" %}
-  {% if f.sort == col and f.dir == "asc" %}
-    {% set next_dir = "desc" %}
-  {% elif f.sort == col and f.dir == "desc" %}
-    {% set next_dir = "asc" %}
-  {% else %}
-    {% set next_dir = "asc" %}
-  {% endif %}
-
-  {% set arrow = "" %}
-  {% if f.sort == col %}
-    {% if f.dir == "asc" %}{% set arrow = " ▲" %}{% else %}{% set arrow = " ▼" %}{% endif %}
-  {% endif %}
-
-  {% if not baseline_loaded %}
-  <div class="alert alert-light border small">
-    Market baseline not found. Export <code>data/market_baseline_eurm2.csv</code> to enable Premium %.
-  </div>
+{% if not baseline_loaded %}
+ <div class="alert alert-light border small">
+   Market baseline not found. Export <code>data/market_baseline_eurm2.csv</code> to enable <strong>Premium %</strong>.
+ </div>
 {% endif %}
 
-  <a class="text-decoration-none" href="/offers?{{ build_qs(qs, {'sort': col, 'dir': next_dir, 'page': 1}) }}">
-    {{ label }}<span class="text-muted">{{ arrow }}</span>
-  </a>
-{%- endmacro %}
-
 <form class="row g-2 align-items-end mb-3" method="get" action="/offers">
-  <div class="col-12 col-lg-3">
-    <label class="form-label small text-muted">Arrondissements</label>
-    <select class="form-select form-select-sm" name="arr" multiple size="6">
-      {% for a in arr_options %}
-        <option value="{{ a }}" {% if a|string in f.arr %}selected{% endif %}>{{ a }}</option>
-      {% endfor %}
-    </select>
-    <div class="text-muted small mt-1">Cmd/Ctrl-click to select multiple.</div>
-  </div>
 
-  <div class="col-6 col-lg-2">
-    <label class="form-label small text-muted">Rooms</label>
-    <select class="form-select form-select-sm" name="rooms">
-      <option value="">All</option>
-      {% for r in room_options %}
-        <option value="{{ r }}" {% if f.rooms == r|string %}selected{% endif %}>{{ r }}</option>
-      {% endfor %}
-    </select>
-  </div>
+ <div class="col-12 col-lg-3">
+   <label class="form-label small text-muted">Arrondissements</label>
+   <select class="form-select form-select-sm" name="arr" multiple size="6">
+     {% for a in arr_options %}
+       <option value="{{ a }}" {% if a|string in f.arr %}selected{% endif %}>{{ a }}</option>
+     {% endfor %}
+   </select>
+   <div class="text-muted small mt-1">Cmd/Ctrl-click to select multiple.</div>
+ </div>
 
-  <div class="col-6 col-lg-2">
-    <label class="form-label small text-muted">Price min (€)</label>
-    <input class="form-control form-control-sm" name="price_min" value="{{ f.price_min }}" placeholder="300000">
-  </div>
+ <div class="col-6 col-lg-2">
+   <label class="form-label small text-muted">Rooms</label>
+   <select class="form-select form-select-sm" name="rooms">
+     <option value="">All</option>
+     {% for r in room_options %}
+       <option value="{{ r }}" {% if f.rooms == r|string %}selected{% endif %}>{{ r }}</option>
+     {% endfor %}
+   </select>
+ </div>
 
-  <div class="col-6 col-lg-2">
-    <label class="form-label small text-muted">Price max (€)</label>
-    <input class="form-control form-control-sm" name="price_max" value="{{ f.price_max }}" placeholder="900000">
-  </div>
+ <div class="col-6 col-lg-2">
+   <label class="form-label small text-muted">Price min (€)</label>
+   <input class="form-control form-control-sm" name="price_min" value="{{ f.price_min }}" placeholder="300000">
+ </div>
 
-  <div class="col-6 col-lg-1">
-    <label class="form-label small text-muted">m² min</label>
-    <input class="form-control form-control-sm" name="surf_min" value="{{ f.surf_min }}" placeholder="30">
-  </div>
+ <div class="col-6 col-lg-2">
+   <label class="form-label small text-muted">Price max (€)</label>
+   <input class="form-control form-control-sm" name="price_max" value="{{ f.price_max }}" placeholder="900000">
+ </div>
 
-  <div class="col-6 col-lg-1">
-    <label class="form-label small text-muted">m² max</label>
-    <input class="form-control form-control-sm" name="surf_max" value="{{ f.surf_max }}" placeholder="80">
-  </div>
+ <div class="col-6 col-lg-1">
+   <label class="form-label small text-muted">m² min</label>
+   <input class="form-control form-control-sm" name="surf_min" value="{{ f.surf_min }}" placeholder="30">
+ </div>
 
-  {# keep sort state when applying filters #}
-  <input type="hidden" name="sort" value="{{ f.sort }}">
-  <input type="hidden" name="dir" value="{{ f.dir }}">
-  <input type="hidden" name="page" value="1">
+ <div class="col-6 col-lg-1">
+   <label class="form-label small text-muted">m² max</label>
+   <input class="form-control form-control-sm" name="surf_max" value="{{ f.surf_max }}" placeholder="80">
+ </div>
 
-  <div class="col-12 d-flex gap-2 mt-2">
-    <button class="btn btn-sm btn-dark" type="submit">Apply</button>
-    <a class="btn btn-sm btn-outline-secondary" href="/offers">Reset</a>
-  </div>
+ <div class="col-12 col-lg-4">
+   <label class="form-label small text-muted">Status</label>
+   <div class="d-flex gap-3 flex-wrap">
+     <div class="form-check">
+       <input class="form-check-input" type="checkbox" name="status" value="kept"
+              id="st_kept" {% if "kept" in f.status %}checked{% endif %}>
+       <label class="form-check-label small" for="st_kept">
+         <span class="badge text-bg-success">kept</span>
+       </label>
+     </div>
+
+     <div class="form-check">
+       <input class="form-check-input" type="checkbox" name="status" value="discarded"
+              id="st_discarded" {% if "discarded" in f.status %}checked{% endif %}>
+       <label class="form-check-label small" for="st_discarded">
+         <span class="badge text-bg-danger">discarded</span>
+       </label>
+     </div>
+
+     <div class="form-check">
+       <input class="form-check-input" type="checkbox" name="status" value="new"
+              id="st_new" {% if "new" in f.status %}checked{% endif %}>
+       <label class="form-check-label small" for="st_new">
+         <span class="badge text-bg-light border">new</span>
+       </label>
+     </div>
+
+     <div class="form-check ms-lg-3">
+       <input class="form-check-input" type="checkbox" name="contacted_only" value="1"
+              id="st_contacted" {% if f.contacted_only == "1" %}checked{% endif %}>
+       <label class="form-check-label small" for="st_contacted">
+         <span class="badge text-bg-primary">contacted only</span>
+       </label>
+     </div>
+   </div>
+ </div>
+
+ {# preserve sort state when applying filters #}
+ <input type="hidden" name="sort" value="{{ f.sort }}">
+ <input type="hidden" name="dir" value="{{ f.dir }}">
+ <input type="hidden" name="page" value="1">
+
+ <div class="col-12 d-flex gap-2 mt-2">
+   <button class="btn btn-sm btn-dark" type="submit">Apply</button>
+   <a class="btn btn-sm btn-outline-secondary" href="/offers">Reset</a>
+ </div>
 </form>
 
-<div class="table-responsive">
-  <table class="table table-sm align-middle">
-    <thead>
-      <tr class="text-muted small">
-        <th>{{ sort_link("Name", "name") }}</th>
-        <th class="text-end">{{ sort_link("Price", "price_eur") }}</th>
-        <th class="text-end">{{ sort_link("Surface", "surface_m2") }}</th>
-        <th class="text-end">{{ sort_link("€/m²", "eur_m2") }}</th>
-        <th class="text-end">{{ sort_link("Rooms", "rooms") }}</th>
-        <th class="text-end">{{ sort_link("Arr", "arrondissement") }}</th>
-        <th>{{ sort_link("Date", "published_date") }}</th>
-        <th>Link</th>
-        <th class="text-end">{{ sort_link("Premium %", "premium_pct") }}</th>
-      </tr>
-    </thead>
+<div class="table-responsive w-100">
+ <table class="table table-sm table-hover align-middle">
+   <thead>
+     <tr class="text-muted small">
+       <th>Status</th>
+       <th>Actions</th>
+       <th>{{ sort_link("Name", "name", f.sort, f.dir, qs) }}</th>
+       <th class="text-end">{{ sort_link("Price", "price_eur", f.sort, f.dir, qs) }}</th>
+       <th class="text-end">{{ sort_link("Surface", "surface_m2", f.sort, f.dir, qs) }}</th>
+       <th class="text-end">{{ sort_link("€/m²", "eur_m2", f.sort, f.dir, qs) }}</th>
+       <th class="text-end">{{ sort_link("Premium %", "premium_pct", f.sort, f.dir, qs) }}</th>
+       <th class="text-end">{{ sort_link("Rooms", "rooms", f.sort, f.dir, qs) }}</th>
+       <th class="text-end">{{ sort_link("Arr", "arrondissement", f.sort, f.dir, qs) }}</th>
+       <th>{{ sort_link("Date", "published_date", f.sort, f.dir, qs) }}</th>
+       <th>Notes</th>
+       <th>Link</th>
+     </tr>
+   </thead>
 
-    <tbody>
-      {% for o in offers %}
-        <tr>
-          <td class="small" style="max-width: 420px;">{{ o.get("name","") }}</td>
+   <tbody>
+     {% for o in offers %}
+       <tr class="{% if o.get('status') == 'discarded' %}opacity-50{% endif %}">
+         <td class="small">
+           {% if o.get("status") == "kept" %}
+             <span class="badge text-bg-success">kept</span>
+           {% elif o.get("status") == "discarded" %}
+             <span class="badge text-bg-danger">discarded</span>
+           {% else %}
+             <span class="badge text-bg-light border">new</span>
+           {% endif %}
 
-          <td class="text-end small">
-            {% if o.get("price_eur") %}{{ "{:,.0f}".format(o.get("price_eur")).replace(",", " ") }}{% endif %}
-          </td>
+           {% if o.get("contacted") %}
+             <span class="badge text-bg-primary ms-1">contacted</span>
+           {% endif %}
+         </td>
 
-          <td class="text-end small">
-            {% if o.get("surface_m2") %}{{ "{:.1f}".format(o.get("surface_m2")) }}{% endif %}
-          </td>
+         <td class="small" style="min-width: 190px;">
+           <div class="d-flex gap-1 flex-wrap">
+             <form method="post" action="/offers/set_status" class="m-0">
+               <input type="hidden" name="offer_id" value="{{ o.get('offer_id') }}">
+               <input type="hidden" name="status" value="kept">
+               <input type="hidden" name="back" value="{{ current_url or '/offers' }}">
+               <button class="btn btn-sm btn-outline-success">Keep</button>
+             </form>
 
-          <td class="text-end small">
-            {% if o.get("eur_m2") %}{{ "{:,.0f}".format(o.get("eur_m2")).replace(",", " ") }}{% endif %}
-          </td>
+             <form method="post" action="/offers/set_status" class="m-0">
+               <input type="hidden" name="offer_id" value="{{ o.get('offer_id') }}">
+               <input type="hidden" name="status" value="discarded">
+               <input type="hidden" name="back" value="{{ current_url or '/offers' }}">
+               <button class="btn btn-sm btn-outline-danger">Discard</button>
+             </form>
 
-          <td class="text-end small">{{ o.get("rooms","") }}</td>
-          <td class="text-end small">{{ o.get("arrondissement","") }}</td>
-          <td class="small text-muted">{{ o.get("published_date","") }}</td>
+             <form method="post" action="/offers/toggle_contacted" class="m-0">
+               <input type="hidden" name="offer_id" value="{{ o.get('offer_id') }}">
+               <input type="hidden" name="contacted" value="{{ '0' if o.get('contacted') else '1' }}">
+               <input type="hidden" name="back" value="{{ current_url or '/offers' }}">
+               <button class="btn btn-sm btn-outline-primary">
+                 {{ "Uncontact" if o.get("contacted") else "Contacted" }}
+               </button>
+             </form>
+           </div>
+         </td>
 
-          <td class="small">
-            {% if o.get("url") %}
-              <a href="{{ o.get('url') }}" target="_blank" rel="noopener">open</a>
-            {% endif %}
-          </td>
-          <td class="text-end small">
-            {% if o.get("premium_pct") is not none and o.get("premium_pct") != "" %}
-              {{ "{:+.1f}%".format(o.get("premium_pct")) }}
-            {% else %}
-              <span class="text-muted">—</span>
-            {% endif %}
-          </td>
-        </tr>
-      {% endfor %}
+         <td class="small" style="max-width: 360px;">
+           {{ o.get("name","") }}
+         </td>
 
-      {% if offers|length == 0 %}
-        <tr><td colspan="8" class="text-muted small">No offers match these filters.</td></tr>
-      {% endif %}
-    </tbody>
-  </table>
+         <td class="text-end small">
+           {% if o.get("price_eur") %}{{ "{:,.0f}".format(o.get("price_eur")).replace(",", " ") }}{% endif %}
+         </td>
+
+         <td class="text-end small">
+           {% if o.get("surface_m2") %}{{ "{:.1f}".format(o.get("surface_m2")) }}{% endif %}
+         </td>
+
+         <td class="text-end small">
+           {% if o.get("eur_m2") %}{{ "{:,.0f}".format(o.get("eur_m2")).replace(",", " ") }}{% endif %}
+         </td>
+
+         <td class="text-end small">
+           {% if o.get("premium_pct") is not none and o.get("premium_pct") != "" %}
+             {{ "{:+.1f}%".format(o.get("premium_pct")) }}
+           {% else %}
+             <span class="text-muted">—</span>
+           {% endif %}
+         </td>
+
+         <td class="text-end small">{{ o.get("rooms","") }}</td>
+         <td class="text-end small">{{ o.get("arrondissement","") }}</td>
+         <td class="small text-muted">{{ o.get("published_date","") }}</td>
+
+         <td class="small" style="min-width: 260px;">
+           <form method="post" action="/offers/save_notes" class="m-0 d-flex gap-1">
+             <input type="hidden" name="offer_id" value="{{ o.get('offer_id') }}">
+             <input type="hidden" name="back" value="{{ current_url or '/offers' }}">
+             <input class="form-control form-control-sm" name="notes"
+                    value="{{ o.get('notes','') }}" placeholder="Notes…">
+             <button class="btn btn-sm btn-outline-primary">Save</button>
+           </form>
+         </td>
+
+         <td class="small">
+           {% if o.get("url") %}
+             <a href="{{ o.get('url') }}" target="_blank" rel="noopener">open</a>
+           {% endif %}
+         </td>
+       </tr>
+     {% endfor %}
+
+     {% if offers|length == 0 %}
+       <tr><td colspan="12" class="text-muted small">No offers match these filters.</td></tr>
+     {% endif %}
+   </tbody>
+ </table>
 </div>
 
 {% if total_pages > 1 %}
 <nav class="d-flex justify-content-between align-items-center mt-3">
-  <div class="text-muted small">Page {{ page }} / {{ total_pages }}</div>
+ <div class="text-muted small">Page {{ page }} / {{ total_pages }}</div>
 
-  <ul class="pagination pagination-sm mb-0">
-    <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-      <a class="page-link" href="/offers?{{ build_qs(qs, {'page': page-1}) }}">Prev</a>
-    </li>
+ <ul class="pagination pagination-sm mb-0">
+   <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+     <a class="page-link" href="/offers?{{ qs_build(qs, {'page': (page-1)|string }) }}">Prev</a>
+   </li>
 
-    {% for p in range(1, total_pages+1) %}
-      {% if p == 1 or p == total_pages or (p >= page-2 and p <= page+2) %}
-        <li class="page-item {% if p == page %}active{% endif %}">
-          <a class="page-link" href="/offers?{{ build_qs(qs, {'page': p}) }}">{{ p }}</a>
-        </li>
-      {% elif p == 2 and page > 4 %}
-        <li class="page-item disabled"><span class="page-link">…</span></li>
-      {% elif p == total_pages-1 and page < total_pages-3 %}
-        <li class="page-item disabled"><span class="page-link">…</span></li>
-      {% endif %}
-    {% endfor %}
+   {% for p in range(1, total_pages+1) %}
+     {% if p == 1 or p == total_pages or (p >= page-2 and p <= page+2) %}
+       <li class="page-item {% if p == page %}active{% endif %}">
+         <a class="page-link" href="/offers?{{ qs_build(qs, {'page': p|string }) }}">{{ p }}</a>
+       </li>
+     {% elif p == 2 and page > 4 %}
+       <li class="page-item disabled"><span class="page-link">…</span></li>
+     {% elif p == total_pages-1 and page < total_pages-3 %}
+       <li class="page-item disabled"><span class="page-link">…</span></li>
+     {% endif %}
+   {% endfor %}
 
-    <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-      <a class="page-link" href="/offers?{{ build_qs(qs, {'page': page+1}) }}">Next</a>
-    </li>
-  </ul>
+   <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+     <a class="page-link" href="/offers?{{ qs_build(qs, {'page': (page+1)|string }) }}">Next</a>
+   </li>
+ </ul>
 </nav>
 {% endif %}
 
